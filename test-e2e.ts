@@ -25,7 +25,7 @@ const testCordia = async () => {
   const cordia = new CordiaClient({
     apiKey: API_KEY,
     botId: BOT_ID,
-    baseUrl: 'http://localhost:5000/api/v1', // Pointing SDK here!
+    baseUrl: 'https://cordlane-brain.onrender.com/api/v1', // Pointing SDK here!
     batchSize: 2,           // Force small batches for fast sending
     flushInterval: 2000,    // Force 2 second flushes
     autoHeartbeat: true     // Ping heartbeat!
