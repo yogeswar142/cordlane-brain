@@ -46,3 +46,13 @@ export type TrackCommandInput = z.infer<typeof trackCommandSchema>;
 export type TrackUserInput = z.infer<typeof trackUserSchema>;
 export type GuildCountInput = z.infer<typeof guildCountSchema>;
 export type HeartbeatInput = z.infer<typeof heartbeatSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Track Batch
+// ─────────────────────────────────────────────────────────────
+export const trackBatchSchema = z.object({
+  botId: z.string().min(1, 'botId is required'),
+  events: z.array(z.any()).min(1, 'events array must not be empty')
+});
+
+export type TrackBatchInput = z.infer<typeof trackBatchSchema>;

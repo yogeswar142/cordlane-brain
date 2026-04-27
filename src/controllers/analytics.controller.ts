@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Bot, CommandEvent, UserEvent, GuildCount, Heartbeat } from '../models';
-import type { TrackCommandInput, TrackUserInput, GuildCountInput, HeartbeatInput } from '../validators/schemas';
+import type { TrackCommandInput, TrackUserInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
 
 const VERIFICATION_THRESHOLD = 5;
 
@@ -9,12 +9,12 @@ const VERIFICATION_THRESHOLD = 5;
  * the verification threshold (5 API calls). This proves the developer
  * actually owns and operates the bot.
  */
-const incrementApiCallsAndVerify = async (botId: string) => {
+const incrementApiCallsAndVerify = async (botId: string, amount: number = 1) => {
   try {
     // Atomic increment of apiCallCount
     const bot = await Bot.findOneAndUpdate(
       { botId },
-      { $inc: { apiCallCount: 1 } },
+      { $inc: { apiCallCount: amount } },
       { new: true }
     );
 
@@ -110,6 +110,51 @@ export const heartbeat = async (req: Request, res: Response): Promise<void> => {
     res.status(200).json({ success: true, message: 'Heartbeat received' });
   } catch (error) {
     console.error('Error processing heartbeat:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+export const trackBatch = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { botId, events } = req.body as TrackBatchInput;
+    
+    if (!events || events.length === 0) {
+      res.status(200).json({ success: true, message: 'Empty batch' });
+      return;
+    }
+
+    const commands: any[] = [];
+    const users: any[] = [];
+    const guildCounts: any[] = [];
+    const heartbeats: any[] = [];
+
+    events.forEach(event => {
+      // Add botId and parse timestamp
+      const data = { ...event, botId, timestamp: event.timestamp ? new Date(event.timestamp) : new Date() };
+      
+      if (event.type === 'command') commands.push(data);
+      else if (event.type === 'user') users.push(data);
+      else if (event.type === 'guildCount') guildCounts.push(data);
+      else if (event.type === 'heartbeat') heartbeats.push(data);
+      // fallback if type is missing but specific fields are present
+      else if (event.command) commands.push(data);
+      else if (event.userId && event.action) users.push(data);
+      else if (event.count !== undefined) guildCounts.push(data);
+      else if (event.uptime !== undefined) heartbeats.push(data);
+    });
+
+    const promises = [];
+    if (commands.length > 0) promises.push(CommandEvent.insertMany(commands));
+    if (users.length > 0) promises.push(UserEvent.insertMany(users));
+    if (guildCounts.length > 0) promises.push(GuildCount.insertMany(guildCounts));
+    if (heartbeats.length > 0) promises.push(Heartbeat.insertMany(heartbeats));
+
+    await Promise.all(promises);
+    await incrementApiCallsAndVerify(botId, events.length);
+
+    res.status(200).json({ success: true, message: `Batch processed ${events.length} events` });
+  } catch (error) {
+    console.error('Error tracking batch:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 };
