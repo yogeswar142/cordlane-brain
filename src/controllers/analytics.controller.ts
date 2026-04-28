@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Bot, CommandEvent, UserEvent, GuildCount, Heartbeat } from '../models';
+import { Bot, CommandEvent, UserEvent, GuildCount, Heartbeat, Revenue } from '../models';
 import type { TrackCommandInput, TrackUserInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
 
 const VERIFICATION_THRESHOLD = 5;
@@ -402,8 +402,20 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     const now = new Date();
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
-    const [commandsWeekly, activeUserIds, heartbeatsToday, commandsByDateAgg] = await Promise.all([
+    const [
+      commandsWeekly,
+      activeUserIds,
+      heartbeatsToday,
+      commandsByDateAgg,
+      shardCommandVolumeAgg,
+      heatmapRaw,
+      revenueByDayAgg,
+      totalRevenueCurrentAgg,
+      totalRevenuePrevAgg,
+    ] = await Promise.all([
       CommandEvent.countDocuments({ botId: requestedBotId, timestamp: { $gte: oneWeekAgo } }),
       UserEvent.distinct('userId', { botId: requestedBotId, timestamp: { $gte: oneDayAgo } }),
       Heartbeat.countDocuments({ botId: requestedBotId, timestamp: { $gte: oneDayAgo } }),
@@ -412,7 +424,86 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
         { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } }, count: { $sum: 1 } } },
         { $sort: { _id: 1 } },
       ]),
+      CommandEvent.aggregate([
+        { $match: { botId: requestedBotId, timestamp: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: '$shardId', count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
+      CommandEvent.aggregate([
+        { $match: { botId: requestedBotId, timestamp: { $gte: thirtyDaysAgo } } },
+        {
+          $group: {
+            _id: {
+              day: { $dayOfWeek: '$timestamp' },
+              hour: { $hour: '$timestamp' },
+            },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+      Revenue.aggregate([
+        { $match: { botId: requestedBotId, date: { $gte: thirtyDaysAgo } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
+            total: { $sum: '$amount' },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+      Revenue.aggregate([
+        { $match: { botId: requestedBotId, date: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      Revenue.aggregate([
+        { $match: { botId: requestedBotId, date: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
     ]);
+
+    // Compute User Retention Cohorts
+    const retentionData = [];
+    for (let w = 4; w >= 0; w--) {
+      const cohortStart = new Date(now.getTime() - (w + 1) * 7 * 24 * 60 * 60 * 1000);
+      const cohortEnd = new Date(now.getTime() - w * 7 * 24 * 60 * 60 * 1000);
+      const cohortLabel = cohortStart.toISOString().split('T')[0];
+
+      const firstSeenPipeline = await UserEvent.aggregate([
+        { $match: { botId: requestedBotId, timestamp: { $gte: cohortStart, $lt: cohortEnd } } },
+        { $group: { _id: '$userId', firstSeen: { $min: '$timestamp' } } },
+        { $match: { firstSeen: { $gte: cohortStart, $lt: cohortEnd } } },
+      ]);
+      const cohortUsers = firstSeenPipeline.map((u: any) => u._id);
+      const totalUsers = cohortUsers.length;
+
+      if (totalUsers === 0) {
+        retentionData.push({ cohort: cohortLabel, totalUsers: 0, day1: 0, day7: 0, day30: 0 });
+        continue;
+      }
+
+      const [day1Returned, day7Returned, day30Returned] = await Promise.all([
+        UserEvent.distinct('userId', {
+          botId: requestedBotId, userId: { $in: cohortUsers },
+          timestamp: { $gte: cohortEnd, $lt: new Date(cohortEnd.getTime() + 24 * 60 * 60 * 1000) }
+        }),
+        UserEvent.distinct('userId', {
+          botId: requestedBotId, userId: { $in: cohortUsers },
+          timestamp: { $gte: new Date(cohortEnd.getTime() + 6 * 24 * 60 * 60 * 1000), $lt: new Date(cohortEnd.getTime() + 8 * 24 * 60 * 60 * 1000) }
+        }),
+        UserEvent.distinct('userId', {
+          botId: requestedBotId, userId: { $in: cohortUsers },
+          timestamp: { $gte: new Date(cohortEnd.getTime() + 29 * 24 * 60 * 60 * 1000), $lt: new Date(cohortEnd.getTime() + 31 * 24 * 60 * 60 * 1000) }
+        }),
+      ]);
+
+      retentionData.push({
+        cohort: cohortLabel,
+        totalUsers,
+        day1: Math.round((day1Returned.length / totalUsers) * 100),
+        day7: Math.round((day7Returned.length / totalUsers) * 100),
+        day30: Math.round((day30Returned.length / totalUsers) * 100),
+      });
+    }
 
     const dau = activeUserIds.length;
     const configuredShardCount = Math.max(1, shards.length);
@@ -420,6 +511,10 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     const uptimePercent = heartbeatsToday >= expectedHeartbeatsPerDay
       ? 100
       : parseFloat(((heartbeatsToday / expectedHeartbeatsPerDay) * 100).toFixed(2));
+
+    const currentRev = totalRevenueCurrentAgg[0]?.total || 0;
+    const prevRev = totalRevenuePrevAgg[0]?.total || 0;
+    const revenueChange = prevRev > 0 ? ((currentRev - prevRev) / prevRev) * 100 : (currentRev > 0 ? 100 : 0);
 
     res.status(200).json({
       success: true,
@@ -444,6 +539,21 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
           date: c._id,
           commands: c.count,
         })),
+        advanced: {
+          retentionData,
+          heatmapData: heatmapRaw.map((h: any) => ({
+            day: h._id.day - 1,
+            hour: h._id.hour,
+            count: h.count,
+          })),
+          shardGuildDistribution: shards.map((s) => ({ shard: s.id, guilds: s.guildCount || 0 })),
+          shardCommandVolume: shardCommandVolumeAgg.map((s: any) => ({ shard: s._id, commands: s.count })),
+          revenueData: {
+            daily: revenueByDayAgg.map((r: any) => ({ date: r._id, amount: r.total / 100 })),
+            total: currentRev / 100,
+            change: revenueChange,
+          },
+        },
       },
     });
   } catch (error) {

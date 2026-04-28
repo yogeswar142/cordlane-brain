@@ -24,39 +24,43 @@ export const requireApiKey = async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    const apiKey = authHeader.split(' ')[1];
+    // Find bot by botId
+    const bot = await Bot.findOne({ botId });
 
-    if (!apiKey || !apiKey.startsWith('cordia_')) {
-      res.status(401).json({ 
+    if (!bot) {
+      res.status(404).json({ 
         success: false, 
-        error: 'Invalid API key format. Keys should start with "cordia_"',
-        code: 'INVALID_KEY_FORMAT'
+        error: 'Bot not found. It may have been deleted from the Cordia dashboard.',
+        code: 'BOT_NOT_FOUND'
       });
       return;
     }
 
-    // Find bot by botId and apiKey
-    const bot = await Bot.findOne({ botId, apiKey });
+    // PUBLIC ACCESS EXCEPTION: 
+    // Allow GET /summary for public bots even without a valid API key header
+    const isSummaryRequest = req.method === 'GET' && req.path.includes('/summary');
+    if (isSummaryRequest && bot.isPublic) {
+      (req as any).bot = bot;
+      return next();
+    }
 
-    if (!bot) {
-      // Check if the bot exists at all (key might have been regenerated)
-      const botExists = await Bot.findOne({ botId });
-      
-      if (!botExists) {
-        // Bot was deleted entirely
-        res.status(404).json({ 
-          success: false, 
-          error: 'Bot not found. It may have been deleted from the Cordia dashboard.',
-          code: 'BOT_NOT_FOUND'
-        });
-      } else {
-        // Bot exists but API key doesn't match — key was regenerated
-        res.status(401).json({ 
-          success: false, 
-          error: 'Invalid API Key. Your key may have been regenerated. Check your Cordia dashboard for the latest key.',
-          code: 'INVALID_API_KEY'
-        });
-      }
+    // Standard API Key verification for all other requests
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+       res.status(401).json({ 
+         success: false, 
+         error: 'Authorization header missing or invalid format (Bearer token required)',
+         code: 'AUTH_MISSING'
+       });
+       return;
+    }
+
+    const apiKey = authHeader.split(' ')[1];
+    if (apiKey !== bot.apiKey) {
+      res.status(401).json({ 
+        success: false, 
+        error: 'Invalid API Key. Your key may have been regenerated. Check your Cordia dashboard for the latest key.',
+        code: 'INVALID_API_KEY'
+      });
       return;
     }
 

@@ -25,3 +25,6 @@ export type { IReview } from './Review';
 
 export { Comment } from './Comment';
 export type { IComment } from './Comment';
+
+export { Revenue } from './Revenue';
+export type { IRevenue } from './Revenue';
