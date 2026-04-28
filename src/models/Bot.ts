@@ -4,6 +4,11 @@ export interface IBot extends Document {
   botId: string;
   apiKey: string;
   ownerId: string;
+  collaborators?: {
+    userId: string;
+    role: 'admin' | 'analyst';
+    addedAt: Date;
+  }[];
   name: string;
   description?: string;
   avatar?: string;
@@ -32,6 +37,19 @@ const botSchema = new Schema(
     botId: { type: String, required: true, unique: true },
     apiKey: { type: String, required: true, unique: true },
     ownerId: { type: String, required: true, index: true },
+    collaborators: {
+      type: [
+        new Schema(
+          {
+            userId: { type: String, required: true },
+            role: { type: String, enum: ['admin', 'analyst'], default: 'analyst' },
+            addedAt: { type: Date, default: Date.now },
+          },
+          { _id: false }
+        )
+      ],
+      default: []
+    },
     name: { type: String, required: true },
     description: { type: String },
     avatar: { type: String },
@@ -62,5 +80,7 @@ const botSchema = new Schema(
   },
   { timestamps: true }
 );
+
+botSchema.index({ 'collaborators.userId': 1 });
 
 export const Bot = mongoose.models.Bot || mongoose.model<IBot>('Bot', botSchema);
