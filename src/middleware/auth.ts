@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { Bot } from '../models';
-import { redis } from '../lib/redis';
+import { redis, isRedisReady } from '../lib/redis';
 
 export const requireApiKey = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -21,14 +21,14 @@ export const requireApiKey = async (req: Request, res: Response, next: NextFunct
     const cacheKey = `auth:bot:${botId}`;
 
     // 1. Try Redis cache first
-    if (redis) {
+    if (isRedisReady()) {
       try {
-        const cachedBot = await redis.get(cacheKey);
+        const cachedBot = await redis!.get(cacheKey);
         if (cachedBot) {
           bot = JSON.parse(cachedBot);
         }
       } catch (err) {
-        console.warn('[Redis] Cache read failed for auth, falling back to DB:', err);
+        // Silently fail if Redis is down, fallback to DB
       }
     }
 
@@ -36,17 +36,17 @@ export const requireApiKey = async (req: Request, res: Response, next: NextFunct
     if (!bot) {
       bot = await Bot.findOne({ botId }).lean();
       
-      if (bot && redis) {
+      if (bot && isRedisReady()) {
         // Cache for 5 minutes (300s)
         try {
-          await redis.setex(cacheKey, 300, JSON.stringify({
+          await redis!.setex(cacheKey, 300, JSON.stringify({
             botId: bot.botId,
             name: bot.name,
             apiKey: bot.apiKey,
             isPublic: bot.isPublic
           }));
         } catch (err) {
-          console.warn('[Redis] Cache write failed for auth:', err);
+          // Silently fail cache write
         }
       }
     }

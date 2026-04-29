@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 const shardMetaSchema = {
-  shardId: z.number().int().nonnegative('shardId must be a non-negative integer').optional(),
-  totalShards: z.number().int().positive('totalShards must be a positive integer').optional(),
+  shardId: z.number().int().nonnegative('shardId must be a non-negative integer').nullable().optional(),
+  totalShards: z.number().int().positive('totalShards must be a positive integer').nullable().optional(),
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -11,9 +11,9 @@ const shardMetaSchema = {
 export const trackCommandSchema = z.object({
   botId: z.string().min(1, 'botId is required'),
   command: z.string().min(1, 'command must be a non-empty string'),
-  userId: z.string().optional(),
-  guildId: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  userId: z.string().nullable().optional(),
+  guildId: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
   timestamp: z.string().datetime({ message: 'timestamp must be a valid ISO 8601 date string' }),
   ...shardMetaSchema,
 });
@@ -24,8 +24,8 @@ export const trackCommandSchema = z.object({
 export const trackUserSchema = z.object({
   botId: z.string().min(1, 'botId is required'),
   userId: z.string().min(1, 'userId is required'),
-  guildId: z.string().optional(),
-  action: z.string().optional().default('interaction'),
+  guildId: z.string().nullable().optional(),
+  action: z.string().nullable().optional().default('interaction'),
   timestamp: z.string().datetime({ message: 'timestamp must be a valid ISO 8601 date string' }),
   ...shardMetaSchema,
 });
@@ -62,30 +62,30 @@ export type HeartbeatInput = z.infer<typeof heartbeatSchema>;
 // ─────────────────────────────────────────────────────────────
 const batchEventSchema = z.object({
   // Event classification — at least one of type/event should be present, or inferred from fields
-  type: z.string().optional(),
-  event: z.string().optional(),
+  type: z.string().nullable().optional(),
+  event: z.string().nullable().optional(),
 
   // Command event fields
-  command: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  command: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 
   // User event fields
-  userId: z.string().optional(),
-  guildId: z.string().optional(),
-  action: z.string().optional(),
+  userId: z.string().nullable().optional(),
+  guildId: z.string().nullable().optional(),
+  action: z.string().nullable().optional(),
 
   // Guild count field
-  count: z.number().nonnegative().finite().optional(),
+  count: z.number().nonnegative().finite().nullable().optional(),
 
   // Heartbeat field
-  uptime: z.number().nonnegative().finite().optional(),
+  uptime: z.number().nonnegative().finite().nullable().optional(),
 
   // Shard metadata (per-event override)
-  shardId: z.number().int().nonnegative().optional(),
-  totalShards: z.number().int().positive().optional(),
+  shardId: z.number().int().nonnegative().nullable().optional(),
+  totalShards: z.number().int().positive().nullable().optional(),
 
   // Timestamp (defaults to now if missing)
-  timestamp: z.string().datetime().optional(),
+  timestamp: z.string().datetime().nullable().optional(),
 }).refine(
   (data) => {
     // At least one identifying field must be present to classify the event

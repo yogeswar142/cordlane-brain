@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { redis } from '../lib/redis';
+import { redis, isRedisReady } from '../lib/redis';
 
 interface RateLimitEntry {
   count: number;
@@ -33,25 +33,24 @@ export function rateLimiter(maxRequests = 120, windowMs = 60_000) {
     let count = 0;
     let resetSeconds = windowSeconds;
 
-    if (redis) {
+    if (isRedisReady()) {
       // ─── REDIS CLUSTER-SAFE IMPLEMENTATION ───
       const redisKey = `ratelimit:${apiKey}`;
       try {
-        count = await redis.incr(redisKey);
+        count = await redis!.incr(redisKey);
         if (count === 1) {
-          await redis.expire(redisKey, windowSeconds);
+          await redis!.expire(redisKey, windowSeconds);
         } else {
-          const ttl = await redis.ttl(redisKey);
+          const ttl = await redis!.ttl(redisKey);
           resetSeconds = ttl > 0 ? ttl : windowSeconds;
         }
       } catch (err) {
-        console.warn('[Redis] Rate limit failed, falling back to memory:', err);
         // Fall through to memory logic below if Redis fails
         count = 0; 
       }
     }
 
-    if (!redis || count === 0) {
+    if (count === 0) {
       // ─── IN-MEMORY FALLBACK ───
       let entry = memoryStore.get(apiKey);
 
