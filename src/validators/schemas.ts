@@ -57,13 +57,57 @@ export type GuildCountInput = z.infer<typeof guildCountSchema>;
 export type HeartbeatInput = z.infer<typeof heartbeatSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Batch Event (individual item within a track-batch request)
+// Flexible enough to accept both JS SDK (`type`) and Python SDK (`event`) conventions
+// ─────────────────────────────────────────────────────────────
+const batchEventSchema = z.object({
+  // Event classification — at least one of type/event should be present, or inferred from fields
+  type: z.string().optional(),
+  event: z.string().optional(),
+
+  // Command event fields
+  command: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+
+  // User event fields
+  userId: z.string().optional(),
+  guildId: z.string().optional(),
+  action: z.string().optional(),
+
+  // Guild count field
+  count: z.number().nonnegative().finite().optional(),
+
+  // Heartbeat field
+  uptime: z.number().nonnegative().finite().optional(),
+
+  // Shard metadata (per-event override)
+  shardId: z.number().int().nonnegative().optional(),
+  totalShards: z.number().int().positive().optional(),
+
+  // Timestamp (defaults to now if missing)
+  timestamp: z.string().datetime().optional(),
+}).refine(
+  (data) => {
+    // At least one identifying field must be present to classify the event
+    const hasType = data.type || data.event;
+    const hasCommandField = !!data.command;
+    const hasUserField = !!data.userId;
+    const hasCountField = data.count !== undefined;
+    const hasUptimeField = data.uptime !== undefined;
+    return hasType || hasCommandField || hasUserField || hasCountField || hasUptimeField;
+  },
+  { message: 'Each event must have a type/event field or identifiable data fields (command, userId, count, uptime)' }
+);
+
+// ─────────────────────────────────────────────────────────────
 // Track Batch
 // ─────────────────────────────────────────────────────────────
 export const trackBatchSchema = z.object({
   botId: z.string().min(1, 'botId is required'),
   shardId: z.number().int().nonnegative().optional(),
   totalShards: z.number().int().positive().optional(),
-  events: z.array(z.any()).min(1, 'events array must not be empty')
+  events: z.array(batchEventSchema).min(1, 'events array must not be empty').max(500, 'batch size must not exceed 500 events'),
 });
 
 export type TrackBatchInput = z.infer<typeof trackBatchSchema>;
+

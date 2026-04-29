@@ -14,21 +14,25 @@ export interface ICommandEvent extends Document {
 
 const commandEventSchema = new Schema(
   {
-    botId: { type: String, required: true, index: true },
-    shardId: { type: Number, required: true, default: 0, index: true },
+    botId: { type: String, required: true },
+    shardId: { type: Number, required: true, default: 0 },
     totalShards: { type: Number, required: true, default: 1 },
-    command: { type: String, required: true, index: true },
-    userId: { type: String, index: true },
-    guildId: { type: String, index: true },
+    command: { type: String, required: true },
+    userId: { type: String },
+    guildId: { type: String },
     metadata: { type: Schema.Types.Mixed },
-    timestamp: { type: Date, required: true, index: true },
+    timestamp: { type: Date, required: true },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );
 
 // Compound indexes for dashboard query performance
+// These cover single-field queries via leftmost prefix (no redundant individual indexes needed)
 commandEventSchema.index({ botId: 1, timestamp: -1 });
-commandEventSchema.index({ botId: 1, command: 1 });
+commandEventSchema.index({ botId: 1, command: 1, timestamp: -1 });
 commandEventSchema.index({ botId: 1, shardId: 1, timestamp: -1 });
+
+// TTL: Auto-expire command traces after 90 days to keep active indexes lean
+commandEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 
 export const CommandEvent = mongoose.models.CommandEvent || mongoose.model<ICommandEvent>('CommandEvent', commandEventSchema);

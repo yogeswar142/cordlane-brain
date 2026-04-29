@@ -28,3 +28,9 @@ export type { IComment } from './Comment';
 
 export { Revenue } from './Revenue';
 export type { IRevenue } from './Revenue';
+
+export { AuditLog } from './AuditLog';
+export type { IAuditLog } from './AuditLog';
+
+export { BotRetentionStats } from './BotRetentionStats';
+export type { IBotRetentionStats, RetentionCohortRow } from './BotRetentionStats';

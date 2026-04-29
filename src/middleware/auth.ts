@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { Bot } from '../models';
+import { redis } from '../lib/redis';
 
 export const requireApiKey = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -16,8 +17,39 @@ export const requireApiKey = async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    // Find bot by botId
-    const bot = await Bot.findOne({ botId });
+    let bot: any = null;
+    const cacheKey = `auth:bot:${botId}`;
+
+    // 1. Try Redis cache first
+    if (redis) {
+      try {
+        const cachedBot = await redis.get(cacheKey);
+        if (cachedBot) {
+          bot = JSON.parse(cachedBot);
+        }
+      } catch (err) {
+        console.warn('[Redis] Cache read failed for auth, falling back to DB:', err);
+      }
+    }
+
+    // 2. Fallback to MongoDB
+    if (!bot) {
+      bot = await Bot.findOne({ botId }).lean();
+      
+      if (bot && redis) {
+        // Cache for 5 minutes (300s)
+        try {
+          await redis.setex(cacheKey, 300, JSON.stringify({
+            botId: bot.botId,
+            name: bot.name,
+            apiKey: bot.apiKey,
+            isPublic: bot.isPublic
+          }));
+        } catch (err) {
+          console.warn('[Redis] Cache write failed for auth:', err);
+        }
+      }
+    }
 
     if (!bot) {
       res.status(404).json({ 

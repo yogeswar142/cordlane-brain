@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { Bot, CommandEvent, UserEvent, GuildCount, Heartbeat, Revenue } from '../models';
 import type { TrackCommandInput, TrackUserInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
+import { redis } from '../lib/redis';
+import { getRetentionData } from '../services/retentionStats';
 
 const VERIFICATION_THRESHOLD = 5;
 const DEFAULT_SHARD_ID = 0;
@@ -108,8 +110,10 @@ const incrementApiCallsAndVerify = async (botId: string, amount: number = 1) => 
 
     if (!bot) return;
 
-    // Log the API call with bot name for monitoring
-    console.log(`[API Call] Bot: ${bot.name} (${botId}) | Increment: ${amount}`);
+    // Debug-level logging — only in development to avoid I/O overhead at 1M+ events/day
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[API Call] Bot: ${bot.name} (${botId}) | Increment: ${amount}`);
+    }
 
     // Auto-verify once threshold is reached (only if not already verified)
     if (!bot.verified && bot.apiCallCount >= VERIFICATION_THRESHOLD) {
@@ -291,9 +295,12 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
         commands.push(data);
       } else if (eventType === 'user' || eventType === 'user_active' || (event.userId && event.action)) {
         // Only add if we haven't seen this user in this specific batch yet
-        if (!uniqueUsersInBatch.has(data.userId)) {
-          users.push(data);
-          uniqueUsersInBatch.add(data.userId);
+        const userId = (data as any).userId as unknown;
+        if (typeof userId === 'string' && userId.length > 0) {
+          if (!uniqueUsersInBatch.has(userId)) {
+            users.push(data);
+            uniqueUsersInBatch.add(userId);
+          }
         }
       } else if (eventType === 'guildCount' || eventType === 'guild_count' || event.count !== undefined) {
         guildCounts.push(data);
@@ -313,12 +320,18 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
     }
 
     const promises = [];
-    if (commands.length > 0) promises.push(CommandEvent.insertMany(commands));
-    if (users.length > 0) promises.push(UserEvent.insertMany(users));
-    if (guildCounts.length > 0) promises.push(GuildCount.insertMany(guildCounts));
-    if (heartbeats.length > 0) promises.push(Heartbeat.insertMany(heartbeats));
+    // ordered: false — continue inserting remaining docs if one fails (fault-tolerant batch processing)
+    if (commands.length > 0) promises.push(CommandEvent.insertMany(commands, { ordered: false }));
+    if (users.length > 0) promises.push(UserEvent.insertMany(users, { ordered: false }));
+    if (guildCounts.length > 0) promises.push(GuildCount.insertMany(guildCounts, { ordered: false }));
+    if (heartbeats.length > 0) promises.push(Heartbeat.insertMany(heartbeats, { ordered: false }));
 
-    await Promise.all(promises);
+    // Use allSettled to handle partial batch failures gracefully
+    const results = await Promise.allSettled(promises);
+    const failures = results.filter(r => r.status === 'rejected');
+    if (failures.length > 0) {
+      console.warn(`[Batch] ${failures.length}/${results.length} insert groups had partial failures`);
+    }
     await incrementApiCallsAndVerify(botId, events.length);
 
     res.status(200).json({ success: true, message: `Batch processed ${events.length} events` });
@@ -340,7 +353,8 @@ type ShardSnapshot = {
 
 export const getBotSummary = async (req: Request, res: Response): Promise<void> => {
   try {
-    const requestedBotId = req.params.id;
+    const requestedBotIdParam = req.params.id;
+    const requestedBotId = Array.isArray(requestedBotIdParam) ? requestedBotIdParam[0] : requestedBotIdParam;
     const authBotId = (req as any).bot?.botId as string | undefined;
 
     if (!requestedBotId) {
@@ -352,6 +366,19 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     if (authBotId && requestedBotId !== authBotId) {
       res.status(403).json({ success: false, error: 'forbidden for requested bot id' });
       return;
+    }
+
+    const cacheKey = `bot:summary:${requestedBotId}`;
+    if (redis) {
+      try {
+        const cachedSummary = await redis.get(cacheKey);
+        if (cachedSummary) {
+          res.status(200).json(JSON.parse(cachedSummary));
+          return;
+        }
+      } catch (err) {
+        console.warn('[Redis] Cache read failed for summary:', err);
+      }
     }
 
     const bot = await Bot.findOne({ botId: requestedBotId }).lean() as { botId: string; shards?: ShardSnapshot[] } | null;
@@ -464,49 +491,9 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
       ]),
     ]);
 
-    // Compute User Retention Cohorts
-    const retentionData = [];
-    for (let w = 4; w >= 0; w--) {
-      const cohortStart = new Date(now.getTime() - (w + 1) * 7 * 24 * 60 * 60 * 1000);
-      const cohortEnd = new Date(now.getTime() - w * 7 * 24 * 60 * 60 * 1000);
-      const cohortLabel = cohortStart.toISOString().split('T')[0];
-
-      const firstSeenPipeline = await UserEvent.aggregate([
-        { $match: { botId: requestedBotId, timestamp: { $gte: cohortStart, $lt: cohortEnd } } },
-        { $group: { _id: '$userId', firstSeen: { $min: '$timestamp' } } },
-        { $match: { firstSeen: { $gte: cohortStart, $lt: cohortEnd } } },
-      ]);
-      const cohortUsers = firstSeenPipeline.map((u: any) => u._id);
-      const totalUsers = cohortUsers.length;
-
-      if (totalUsers === 0) {
-        retentionData.push({ cohort: cohortLabel, totalUsers: 0, day1: 0, day7: 0, day30: 0 });
-        continue;
-      }
-
-      const [day1Returned, day7Returned, day30Returned] = await Promise.all([
-        UserEvent.distinct('userId', {
-          botId: requestedBotId, userId: { $in: cohortUsers },
-          timestamp: { $gte: cohortEnd, $lt: new Date(cohortEnd.getTime() + 24 * 60 * 60 * 1000) }
-        }),
-        UserEvent.distinct('userId', {
-          botId: requestedBotId, userId: { $in: cohortUsers },
-          timestamp: { $gte: new Date(cohortEnd.getTime() + 6 * 24 * 60 * 60 * 1000), $lt: new Date(cohortEnd.getTime() + 8 * 24 * 60 * 60 * 1000) }
-        }),
-        UserEvent.distinct('userId', {
-          botId: requestedBotId, userId: { $in: cohortUsers },
-          timestamp: { $gte: new Date(cohortEnd.getTime() + 29 * 24 * 60 * 60 * 1000), $lt: new Date(cohortEnd.getTime() + 31 * 24 * 60 * 60 * 1000) }
-        }),
-      ]);
-
-      retentionData.push({
-        cohort: cohortLabel,
-        totalUsers,
-        day1: Math.round((day1Returned.length / totalUsers) * 100),
-        day7: Math.round((day7Returned.length / totalUsers) * 100),
-        day30: Math.round((day30Returned.length / totalUsers) * 100),
-      });
-    }
+    // Precomputed retention cohorts (fallback to compute).
+    // This removes the heavy retention loop from the request hot path.
+    const retentionData = await getRetentionData(requestedBotId, { freshnessMs: 2 * 60 * 60 * 1000 });
 
     const dau = activeUserIds.length;
     const configuredShardCount = Math.max(1, shards.length);
@@ -519,7 +506,7 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     const prevRev = totalRevenuePrevAgg[0]?.total || 0;
     const revenueChange = prevRev > 0 ? ((currentRev - prevRev) / prevRev) * 100 : (currentRev > 0 ? 100 : 0);
 
-    res.status(200).json({
+    const responsePayload = {
       success: true,
       data: {
         botId: requestedBotId,
@@ -558,7 +545,18 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
           },
         },
       },
-    });
+    };
+
+    if (redis) {
+      try {
+        // Cache summary for 30 seconds
+        await redis.setex(cacheKey, 30, JSON.stringify(responsePayload));
+      } catch (err) {
+        console.warn('[Redis] Cache write failed for summary:', err);
+      }
+    }
+
+    res.status(200).json(responsePayload);
   } catch (error) {
     console.error('Error building bot summary:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
