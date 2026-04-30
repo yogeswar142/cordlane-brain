@@ -133,7 +133,7 @@ const incrementApiCallsAndVerify = async (botId: string, amount: number = 1) => 
 
 export const trackCommand = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { botId: bodyBotId, command, userId, guildId, metadata, timestamp, shardId, totalShards } = req.body as TrackCommandInput;
+    const { botId: bodyBotId, command, userId, guildId, timestamp, shardId, totalShards } = req.body as TrackCommandInput;
     const { botId, mismatch } = resolveBotId(req, bodyBotId);
     if (mismatch) {
       res.status(400).json({ success: false, error: 'botId in body must match authenticated bot id' });
@@ -148,7 +148,6 @@ export const trackCommand = async (req: Request, res: Response): Promise<void> =
       command,
       userId,
       guildId,
-      metadata,
       timestamp: new Date(timestamp)
     });
 
