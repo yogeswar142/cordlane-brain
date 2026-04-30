@@ -30,17 +30,20 @@ const getAuthenticatedBotId = (req: Request): string | null => {
   return authBotId ?? null;
 };
 
-const resolveBotId = (req: Request, bodyBotId: string): { botId: string; mismatch: boolean } => {
+const resolveBotId = (req: Request, bodyBotId?: string | null): { botId: string; mismatch: boolean } => {
   const authBotId = getAuthenticatedBotId(req);
-  if (!authBotId) {
-    return { botId: bodyBotId, mismatch: false };
+  
+  // If there's no botId in the body, use the authenticated one (backward compatibility)
+  if (!bodyBotId) {
+    return { botId: authBotId || '', mismatch: false };
   }
 
-  if (bodyBotId && bodyBotId !== authBotId) {
+  // If there's a botId in the body AND it's different from the auth header, that's a mismatch
+  if (authBotId && bodyBotId !== authBotId) {
     return { botId: authBotId, mismatch: true };
   }
 
-  return { botId: authBotId, mismatch: false };
+  return { botId: bodyBotId, mismatch: false };
 };
 
 const upsertBotShardSnapshot = async (

@@ -103,7 +103,7 @@ const batchEventSchema = z.object({
 // Track Batch
 // ─────────────────────────────────────────────────────────────
 export const trackBatchSchema = z.object({
-  botId: z.string().min(1, 'botId is required'),
+  botId: z.string().min(1).optional(), // Optional on server to allow header fallback
   shardId: z.number().int().nonnegative().optional(),
   totalShards: z.number().int().positive().optional(),
   events: z.array(batchEventSchema).min(1, 'events array must not be empty').max(500, 'batch size must not exceed 500 events'),

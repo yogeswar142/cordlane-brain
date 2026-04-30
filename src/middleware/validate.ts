@@ -19,6 +19,8 @@ export function validate(schema: ZodSchema) {
           message: e.message,
         }));
 
+        console.warn(`[Validation Failed] ${req.method} ${req.path}:`, JSON.stringify(fieldErrors));
+
         res.status(400).json({
           success: false,
           error: 'Validation failed',
