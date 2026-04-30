@@ -39,7 +39,7 @@ async function main() {
       await BotRetentionStats.findOneAndUpdate(
         { botId },
         { $set: { computedAt: new Date(), retentionData } },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
       completed++;
       if (completed % 5 === 0) console.log(`✅ Completed ${completed}/${botIds.length}`);

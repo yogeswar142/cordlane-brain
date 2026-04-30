@@ -12,7 +12,7 @@ const app = express();
 // Middleware
 app.use(helmet()); // Security headers
 app.use(cors()); // Allow cross-origin requests
-app.use(express.json()); // Parse JSON bodies
+app.use(express.json({ limit: '10mb' })); // Parse JSON bodies with increased limit
 app.use(morgan('dev')); // Logging
 
 // Rate limiter: 120 requests/minute per API key

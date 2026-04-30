@@ -265,6 +265,11 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
+    // Debug logging for large batches
+    if (events.length > 50 || process.env.NODE_ENV !== 'production') {
+      console.log(`[Batch] Processing ${events.length} events for bot ${botId} (Content-Length: ${req.get('content-length')})`);
+    }
+
     const commands: any[] = [];
     const users: any[] = [];
     const guildCounts: any[] = [];
