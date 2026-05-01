@@ -333,6 +333,10 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     const requestedBotId = Array.isArray(requestedBotIdParam) ? requestedBotIdParam[0] : requestedBotIdParam;
     const authBotId = (req as any).bot?.botId as string | undefined;
 
+    // Range support: default 30, fallback if invalid
+    const rangeParam = parseInt(req.query.range as string) || 30;
+    const rangeDays = [7, 30].includes(rangeParam) ? rangeParam : 30;
+
     if (!requestedBotId) {
       res.status(400).json({ success: false, error: 'bot id is required' });
       return;
@@ -344,7 +348,7 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const cacheKey = `bot:summary:${requestedBotId}`;
+    const cacheKey = `bot:summary:${requestedBotId}:${rangeDays}`;
     if (redis) {
       try {
         const cachedSummary = await redis.get(cacheKey);
@@ -404,92 +408,68 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
           ? 'partial_outage'
           : 'operational';
 
-    // ─── Aggregated Quick Stats (computed in parallel) ───
+    // ─── Aggregated Stats Logic (Hybrid: Summary + Live) ───
     const now = new Date();
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const rangeStart = new Date(now.getTime() - rangeDays * 24 * 60 * 60 * 1000);
     const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
     const [
-      commandsWeekly,
-      activeUserIds,
-      heartbeatsToday,
-      commandsByDateAgg,
-      shardCommandVolumeAgg,
-      heatmapRaw,
+      legacy,
+      historicalSummaries,
+      liveCommandsToday,
+      liveDauToday,
+      liveHeatmapRaw,
+      liveTopCommands,
+      liveTopServers,
+      liveLocales,
       revenueByDayAgg,
       totalRevenueCurrentAgg,
       totalRevenuePrevAgg,
-      topCommandsAgg,
-      topServersAgg,
-      localeDistAgg,
     ] = await Promise.all([
-      CommandEvent.countDocuments({ botId: requestedBotId, timestamp: { $gte: oneWeekAgo } }),
-      CommandEvent.distinct('userId', { botId: requestedBotId, timestamp: { $gte: oneDayAgo } }),
-      Heartbeat.countDocuments({ botId: requestedBotId, timestamp: { $gte: oneDayAgo } }),
+      LegacyStats.findOne({ botId: requestedBotId }).lean() as Promise<any>,
+      DailySummary.find({ botId: requestedBotId, date: { $gte: rangeStart.toISOString().split('T')[0] } }).sort({ date: 1 }).lean() as Promise<any[]>,
+      CommandEvent.countDocuments({ botId: requestedBotId, timestamp: { $gte: startOfToday } }),
+      CommandEvent.distinct('userId', { botId: requestedBotId, timestamp: { $gte: startOfToday } }),
       CommandEvent.aggregate([
-        { $match: { botId: requestedBotId, timestamp: { $gte: oneWeekAgo } } },
-        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-      ]),
-      CommandEvent.aggregate([
-        { $match: { botId: requestedBotId, timestamp: { $gte: thirtyDaysAgo } } },
-        { $group: { _id: '$shardId', count: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-      ]),
-      CommandEvent.aggregate([
-        { $match: { botId: requestedBotId, timestamp: { $gte: thirtyDaysAgo } } },
+        { $match: { botId: requestedBotId, timestamp: { $gte: rangeStart } } },
         {
           $group: {
-            _id: {
-              day: { $dayOfWeek: '$timestamp' },
-              hour: { $hour: '$timestamp' },
-            },
+            _id: { day: { $dayOfWeek: '$timestamp' }, hour: { $hour: '$timestamp' } },
             count: { $sum: 1 },
           },
         },
       ]),
-      Revenue.aggregate([
-        { $match: { botId: requestedBotId, date: { $gte: thirtyDaysAgo } } },
-        {
-          $group: {
-            _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
-            total: { $sum: '$amount' },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]),
-      Revenue.aggregate([
-        { $match: { botId: requestedBotId, date: { $gte: thirtyDaysAgo } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } },
-      ]),
-      Revenue.aggregate([
-        { $match: { botId: requestedBotId, date: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } },
-      ]),
       CommandEvent.aggregate([
-        { $match: { botId: requestedBotId, timestamp: { $gte: thirtyDaysAgo } } },
+        { $match: { botId: requestedBotId, timestamp: { $gte: startOfToday } } },
         { $group: { _id: '$command', count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: 10 }
       ]),
       CommandEvent.aggregate([
-        { $match: { botId: requestedBotId, timestamp: { $gte: thirtyDaysAgo } } },
-        { 
-          $group: { 
-            _id: '$guildId', 
-            name: { $first: '$guildName' },
-            count: { $sum: 1 } 
-          } 
-        },
+        { $match: { botId: requestedBotId, timestamp: { $gte: startOfToday } } },
+        { $group: { _id: '$guildId', name: { $first: '$guildName' }, count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: 10 }
       ]),
       CommandEvent.aggregate([
-        { $match: { botId: requestedBotId, timestamp: { $gte: thirtyDaysAgo } } },
-        { $group: { _id: '$locale', count: { $sum: 1 } } },
-        { $sort: { count: -1 } }
+        { $match: { botId: requestedBotId, timestamp: { $gte: startOfToday } } },
+        { $group: { _id: '$locale', count: { $sum: 1 } } }
+      ]),
+      Revenue.aggregate([
+        { $match: { botId: requestedBotId, date: { $gte: rangeStart } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } }, total: { $sum: '$amount' } } },
+        { $sort: { _id: 1 } },
+      ]),
+      Revenue.aggregate([
+        { $match: { botId: requestedBotId, date: { $gte: rangeStart } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      Revenue.aggregate([
+        { $match: { botId: requestedBotId, date: { $gte: sixtyDaysAgo, $lt: rangeStart } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
     ]);
 
@@ -497,75 +477,87 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     // This removes the heavy retention loop from the request hot path.
     const retentionData = await getRetentionData(requestedBotId, { freshnessMs: 2 * 60 * 60 * 1000 });
 
-    const dau = activeUserIds.length;
-    const configuredShardCount = Math.max(1, shards.length);
-    const expectedHeartbeatsPerDay = 2880 * configuredShardCount;
-    const uptimePercent = heartbeatsToday >= expectedHeartbeatsPerDay
-      ? 100
-      : parseFloat(((heartbeatsToday / expectedHeartbeatsPerDay) * 100).toFixed(2));
+    // ─── MERGE LOGIC ───
+    
+    // Commands History
+    const commandsByDate = historicalSummaries.map(s => ({ date: s.date, count: s.commands }));
+    commandsByDate.push({ date: startOfToday.toISOString().split('T')[0], count: liveCommandsToday });
 
+    // Totals
+    const historicalTotalCommands = historicalSummaries.reduce((acc, s) => acc + s.commands, 0);
+    
+    // Top Commands Merge
+    const commandMap: Record<string, number> = {};
+    historicalSummaries.forEach(s => (s.topCommands || []).forEach((c: any) => commandMap[c.command] = (commandMap[c.command] || 0) + c.count));
+    liveTopCommands.forEach(c => commandMap[c._id] = (commandMap[c._id] || 0) + c.count);
+    const topCommands = Object.entries(commandMap).map(([command, count]) => ({ command, count })).sort((a, b) => b.count - a.count).slice(0, 10);
+
+    // Top Servers Merge
+    const serverMap: Record<string, { name: string, count: number }> = {};
+    historicalSummaries.forEach(s => (s.topServers || []).forEach((sv: any) => {
+       if (!serverMap[sv.guildId]) serverMap[sv.guildId] = { name: sv.name, count: 0 };
+       serverMap[sv.guildId].count += sv.count;
+    }));
+    liveTopServers.forEach(sv => {
+       if (!serverMap[sv._id]) serverMap[sv._id] = { name: sv.name || 'Unknown Server', count: 0 };
+       serverMap[sv._id].count += sv.count;
+    });
+    const topServers = Object.values(serverMap).sort((a, b) => b.count - a.count).slice(0, 10);
+
+    // Locales Merge
+    const localeMap: Record<string, number> = {};
+    historicalSummaries.forEach(s => Object.entries(s.locales || {}).forEach(([loc, count]) => localeMap[loc] = (localeMap[loc] || 0) + (count as number)));
+    liveLocales.forEach(l => localeMap[l._id || 'Unknown'] = (localeMap[l._id || 'Unknown'] || 0) + l.count);
+    const localeDistribution = Object.entries(localeMap).map(([locale, count]) => ({ locale, count })).sort((a, b) => b.count - a.count);
+
+    // Revenue Logic
     const currentRev = totalRevenueCurrentAgg[0]?.total || 0;
     const prevRev = totalRevenuePrevAgg[0]?.total || 0;
-    const revenueChange = prevRev > 0 ? ((currentRev - prevRev) / prevRev) * 100 : (currentRev > 0 ? 100 : 0);
+    const revenueChange = prevRev === 0 ? 0 : ((currentRev - prevRev) / prevRev) * 100;
 
     const responsePayload = {
       success: true,
       data: {
         botId: requestedBotId,
-        totalGuildCount,
+        totalGuildCount: shards.reduce((acc, s) => acc + (s.guildCount || 0), 0),
         healthStatus,
         shardCounts: {
           online: onlineShards,
           lagging: laggingShards,
           offline: offlineShards,
-          total: shards.length,
+          total: shards.length
         },
         shards,
         quickStats: {
-          commandsWeekly,
-          dau,
-          uptimePercent,
-          heartbeatsToday,
+          commandsWeekly: historicalTotalCommands + liveCommandsToday,
+          dau: liveDauToday.length,
+          uptimePercent: historicalSummaries.length > 0 ? historicalSummaries.reduce((acc, s) => acc + s.uptime, 0) / historicalSummaries.length : 100,
+          heartbeatsToday: await Heartbeat.countDocuments({ botId: requestedBotId, timestamp: { $gte: startOfToday } }),
         },
-        commandsByDate: commandsByDateAgg.map((c: any) => ({
-          date: c._id,
-          commands: c.count,
-        })),
+        commandsByDate,
         advanced: {
           retentionData,
-          heatmapData: heatmapRaw.map((h: any) => ({
+          heatmapData: liveHeatmapRaw.map((h: any) => ({
             day: h._id.day - 1,
             hour: h._id.hour,
             count: h.count,
           })),
           shardGuildDistribution: shards.map((s) => ({ shard: s.id, guilds: s.guildCount || 0 })),
-          shardCommandVolume: shardCommandVolumeAgg.map((s: any) => ({ shard: s._id, commands: s.count })),
-          topCommands: topCommandsAgg.map((c: any) => ({ command: c._id, count: c.count })),
-          topServers: topServersAgg.map((s: any) => ({ 
-            guildId: s._id, 
-            name: s.name || 'Unknown Server', 
-            count: s.count 
-          })),
-          localeDistribution: localeDistAgg.map((l: any) => ({ 
-            locale: l._id || 'Unknown', 
-            count: l.count 
-          })),
+          shardCommandVolume: [],
+          topCommands,
+          topServers,
+          localeDistribution,
           revenueData: {
             daily: revenueByDayAgg.map((r: any) => ({ date: r._id, amount: r.total / 100 })),
             total: currentRev / 100,
             change: revenueChange,
           },
         },
-      },
+      }
     };
 
     if (redis) {
-      try {
-        // Cache summary for 30 seconds
-        await redis.setex(cacheKey, 30, JSON.stringify(responsePayload));
-      } catch (err) {
-        console.warn('[Redis] Cache write failed for summary:', err);
-      }
+       await redis.setex(cacheKey, 300, JSON.stringify(responsePayload));
     }
 
     res.status(200).json(responsePayload);
