@@ -35,5 +35,15 @@ export type { IRevenue } from './Revenue';
 export { AuditLog } from './AuditLog';
 export type { IAuditLog } from './AuditLog';
 
+export { SystemConfig } from './SystemConfig';
+export type { ISystemConfig } from './SystemConfig';
+
 export { BotRetentionStats } from './BotRetentionStats';
 export type { IBotRetentionStats, RetentionCohortRow } from './BotRetentionStats';
+
+export { User } from './User';
+export type { IUser } from './User';
+
+export { News } from './News';
+export type { INews } from './News';
+

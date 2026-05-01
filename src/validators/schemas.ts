@@ -16,6 +16,7 @@ export const trackCommandSchema = z.object({
   guildName: z.string().nullable().optional(),
   locale: z.string().nullable().optional(),
   timestamp: z.string().datetime({ message: 'timestamp must be a valid ISO 8601 date string' }),
+  sdkVersion: z.string().nullable().optional(),
   ...shardMetaSchema,
   });
 
@@ -73,6 +74,9 @@ const batchEventSchema = z.object({
   // Shard metadata (per-event override)
   shardId: z.number().int().nonnegative().nullable().optional(),
   totalShards: z.number().int().positive().nullable().optional(),
+
+  // SDK Version
+  sdkVersion: z.string().nullable().optional(),
 
   // Timestamp (defaults to now if missing)
   timestamp: z.string().datetime().nullable().optional(),

@@ -74,6 +74,15 @@ export function rateLimiter(maxRequests = 120, windowMs = 60_000) {
     res.setHeader('X-RateLimit-Reset', resetSeconds);
 
     if (count > maxRequests) {
+      // ─── LOG 429 EVENT FOR ADMIN HEATMAP ───
+      if (isRedisReady()) {
+        const heatmapKey = `ratelimit:429:${apiKey}`;
+        // We use a simple counter for the 429s, expiring in 5 mins
+        redis!.incr(heatmapKey).then(() => {
+          redis!.expire(heatmapKey, 300);
+        }).catch(() => {});
+      }
+
       res.status(429).json({
         success: false,
         error: 'Too many requests. Please increase your SDK batch_size or flush_interval to reduce API hits.',

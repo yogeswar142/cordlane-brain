@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import analyticsRoutes from './routes/v1/analytics.routes';
 import authRoutes from './routes/v1/auth.routes';
+import adminRoutes from './routes/v1/admin.routes';
 import { errorHandler } from './middleware/errorHandler';
 import { rateLimiter } from './middleware/rateLimiter';
 
@@ -26,6 +27,7 @@ app.post('/track-batch', (req, res) => {
 // API Routes
 app.use('/api/v1', analyticsRoutes);
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // Basic health check route
 app.get('/health', (req, res) => {

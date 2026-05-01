@@ -35,3 +35,23 @@ export const redis = client;
 export const isRedisReady = (): boolean => {
   return !!redis && redis.status === 'ready';
 };
+
+/**
+ * Increments the global Events Per Second (EPS) counter in Redis.
+ * Uses a unique key per second and expires it after 60 seconds to conserve memory.
+ */
+export const incrementEps = async (amount: number = 1): Promise<void> => {
+  if (!isRedisReady()) return;
+  
+  const now = Math.floor(Date.now() / 1000);
+  const key = `eps:${now}`;
+  
+  try {
+    const multi = redis!.multi();
+    multi.incrby(key, amount);
+    multi.expire(key, 65); // 65s to ensure overlaps in time windows don't lose data
+    await multi.exec();
+  } catch (err) {
+    // Silent fail for telemetry stats to avoid blocking the main request
+  }
+};

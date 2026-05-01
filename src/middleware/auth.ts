@@ -1,13 +1,37 @@
 import { Request, Response, NextFunction } from 'express';
-import { Bot } from '../models';
+import { Bot, SystemConfig } from '../models';
 import { redis, isRedisReady } from '../lib/redis';
 
 export const requireApiKey = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
-    // Try to get botId from header or from URL params (req.params.id)
     const botId = (req.headers['x-bot-id'] as string) || req.params.id;
     const sdkVersion = req.headers['x-cordia-sdk-version'] as string | undefined;
+
+    // ─────────────────────────────────────────────────────────────
+    // 0. SDK VERSION WARNING (Non-blocking)
+    // ─────────────────────────────────────────────────────────────
+    if (sdkVersion) {
+      // Use Redis to cache the latest version for 1 hour to avoid DB pressure
+      let latestVersion = '1.2.2';
+      if (isRedisReady()) {
+        const cachedLatest = await redis!.get('config:latest_sdk_version');
+        if (cachedLatest) {
+          latestVersion = cachedLatest;
+        } else {
+          const config = await SystemConfig.findOne({ key: 'latest_sdk_version' }).lean();
+          if (config) {
+            latestVersion = config.value;
+            await redis!.setex('config:latest_sdk_version', 3600, latestVersion);
+          }
+        }
+      }
+
+      if (sdkVersion !== latestVersion) {
+        res.setHeader('X-Cordia-SDK-Outdated', 'true');
+        res.setHeader('X-Cordia-Latest-SDK', latestVersion);
+      }
+    }
 
     // ─────────────────────────────────────────────────────────────
     // 1. VERSION ENFORCEMENT (Mandatory v1.2.1+)
@@ -130,4 +154,26 @@ export const requireApiKey = async (req: Request, res: Response, next: NextFunct
       code: 'INTERNAL_ERROR'
     });
   }
+};
+
+/**
+ * Strictly protects internal admin routes.
+ * Requires a Bearer token matching the ADMIN_MASTER_KEY environment variable.
+ */
+export const requireAdminAuth = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  const authHeader = req.headers.authorization;
+  const adminKey = process.env.ADMIN_MASTER_KEY || 'cordia_local_dev_key';
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ success: false, error: 'Admin authentication required' });
+    return;
+  }
+
+  const providedKey = authHeader.split(' ')[1];
+  if (providedKey !== adminKey) {
+    res.status(403).json({ success: false, error: 'Invalid admin credentials' });
+    return;
+  }
+
+  next();
 };

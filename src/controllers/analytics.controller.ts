@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { Bot, CommandEvent, GuildCount, Heartbeat, Revenue, DailySummary, LegacyStats } from '../models';
 import type { TrackCommandInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
-import { redis } from '../lib/redis';
+import { redis, incrementEps } from '../lib/redis';
 import { getRetentionData } from '../services/retentionStats';
 import { resolveCountryCode } from '../utils/locale';
 
@@ -134,7 +134,7 @@ const incrementApiCallsAndVerify = async (botId: string, amount: number = 1) => 
 
 export const trackCommand = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { botId: bodyBotId, command, userId, guildId, guildName, locale, timestamp, shardId, totalShards } = req.body as TrackCommandInput;
+    const { botId: bodyBotId, command, userId, guildId, guildName, locale, timestamp, shardId, totalShards, sdkVersion } = req.body as TrackCommandInput;
     const { botId, mismatch } = resolveBotId(req, bodyBotId);
     if (mismatch) {
       res.status(400).json({ success: false, error: 'botId in body must match authenticated bot id' });
@@ -152,9 +152,11 @@ export const trackCommand = async (req: Request, res: Response): Promise<void> =
       guildName,
       locale,
       countryCode: resolveCountryCode(locale),
+      sdkVersion: sdkVersion || (req.headers['x-cordia-sdk-version'] as string),
       timestamp: new Date(timestamp)
     });
 
+    await incrementEps(1);
     await incrementApiCallsAndVerify(botId);
 
     res.status(200).json({ success: true, message: 'Command event tracked' });
@@ -192,6 +194,7 @@ export const postGuildCount = async (req: Request, res: Response): Promise<void>
     });
     await upsertBotShardSnapshot(botId, normalizedShard.shardId, normalizedShard.totalShards, { guildCount: count });
 
+    await incrementEps(1);
     await incrementApiCallsAndVerify(botId);
 
     res.status(200).json({ success: true, message: 'Guild count updated' });
@@ -227,6 +230,7 @@ export const heartbeat = async (req: Request, res: Response): Promise<void> => {
       status,
     });
 
+    await incrementEps(1);
     await incrementApiCallsAndVerify(botId);
 
     res.status(200).json({ success: true, message: 'Heartbeat received' });
@@ -274,6 +278,7 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
         guildName: event.guildName,
         locale: event.locale,
         countryCode: resolveCountryCode(event.locale),
+        sdkVersion: event.sdkVersion || (req.headers['x-cordia-sdk-version'] as string),
         timestamp: eventTimestamp,
       };
       
@@ -311,6 +316,7 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
     if (failures.length > 0) {
       console.warn(`[Batch] ${failures.length}/${results.length} insert groups had partial failures`);
     }
+    await incrementEps(events.length);
     await incrementApiCallsAndVerify(botId, events.length);
 
     res.status(200).json({ success: true, message: `Batch processed ${events.length} events` });

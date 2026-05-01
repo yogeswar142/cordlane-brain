@@ -18,6 +18,13 @@ export interface IBot extends Document {
   verifiedAt?: Date;
   apiCallCount: number;
   apiKeyLastGenerated: Date;
+  apiKeyAudit?: {
+    key: string;
+    generatedAt: Date;
+    lastUsedAt?: Date;
+    lastUsedIp?: string;
+    revokedAt?: Date;
+  }[];
   shards: {
     id: number;
     totalShards: number;
@@ -59,6 +66,21 @@ const botSchema = new Schema(
     verifiedAt: { type: Date },
     apiCallCount: { type: Number, default: 0 },
     apiKeyLastGenerated: { type: Date, default: Date.now },
+    apiKeyAudit: {
+      type: [
+        new Schema(
+          {
+            key: { type: String, required: true },
+            generatedAt: { type: Date, default: Date.now },
+            lastUsedAt: { type: Date },
+            lastUsedIp: { type: String },
+            revokedAt: { type: Date },
+          },
+          { _id: false }
+        )
+      ],
+      default: []
+    },
     shards: {
       type: [
         new Schema(
