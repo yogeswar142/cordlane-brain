@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Bot, CommandEvent, GuildCount, Heartbeat, Revenue } from '../models';
+import { Bot, CommandEvent, GuildCount, Heartbeat, Revenue, DailySummary, LegacyStats } from '../models';
 import type { TrackCommandInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
 import { redis } from '../lib/redis';
 import { getRetentionData } from '../services/retentionStats';
