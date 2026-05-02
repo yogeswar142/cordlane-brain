@@ -5,6 +5,7 @@ export interface IDailySummary extends Document {
   date: string; // YYYY-MM-DD
   commands: number;
   dau: number;
+  guildCount: number;
   locales: Record<string, number>;
   countries: Record<string, number>;
   topCommands: Array<{ command: string; count: number }>;
@@ -19,6 +20,7 @@ const dailySummarySchema = new Schema(
     date: { type: String, required: true, index: true },
     commands: { type: Number, default: 0 },
     dau: { type: Number, default: 0 },
+    guildCount: { type: Number, default: 0 },
     locales: { type: Schema.Types.Mixed, default: {} },
     countries: { type: Schema.Types.Mixed, default: {} },
     topCommands: [{ command: String, count: Number }],

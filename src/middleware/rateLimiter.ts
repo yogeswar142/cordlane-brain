@@ -76,10 +76,11 @@ export function rateLimiter(maxRequests = 120, windowMs = 60_000) {
     if (count > maxRequests) {
       // ─── LOG 429 EVENT FOR ADMIN HEATMAP ───
       if (isRedisReady()) {
-        const heatmapKey = `ratelimit:429:${apiKey}`;
-        // We use a simple counter for the 429s, expiring in 5 mins
-        redis!.incr(heatmapKey).then(() => {
-          redis!.expire(heatmapKey, 300);
+        const today = new Date().toISOString().split('T')[0];
+        const heatmapKey = `ratelimit:heatmap:${today}`;
+        // We use a ZSET for the 429s to avoid using keys(*) later, expiring in 24 hours
+        redis!.zincrby(heatmapKey, 1, apiKey).then(() => {
+          redis!.expire(heatmapKey, 86400);
         }).catch(() => {});
       }
 

@@ -17,9 +17,10 @@ async function aggregateForBot(botId: string, date: Date) {
   console.log(`   - Aggregating for ${dateStr}`);
 
   // 1. Core Counts
-  const [commands, uniqueUserIds] = await Promise.all([
+  const [commands, uniqueUserIds, latestGuildCount] = await Promise.all([
     CommandEvent.countDocuments({ botId, timestamp: { $gte: startOfDay, $lte: endOfDay } }),
-    CommandEvent.distinct('userId', { botId, timestamp: { $gte: startOfDay, $lte: endOfDay } })
+    CommandEvent.distinct('userId', { botId, timestamp: { $gte: startOfDay, $lte: endOfDay } }),
+    GuildCount.findOne({ botId, timestamp: { $gte: startOfDay, $lte: endOfDay } }).sort({ timestamp: -1 }).lean() as Promise<any>
   ]);
 
   if (commands === 0) {
@@ -73,6 +74,7 @@ async function aggregateForBot(botId: string, date: Date) {
     {
       commands,
       dau: uniqueUserIds.length,
+      guildCount: latestGuildCount?.count || 0,
       topCommands: topCommandsAgg.map(c => ({ command: c._id, count: c.count })),
       topServers: topServersAgg.map(s => ({ guildId: s._id, name: s.name || 'Unknown Server', count: s.count })),
       locales: localeMap,
@@ -85,20 +87,34 @@ async function aggregateForBot(botId: string, date: Date) {
   console.log(`     ✅ Summary saved.`);
 }
 
-async function main() {
-  await mongoose.connect(MONGO_URI);
-  console.log(`✅ Connected to MongoDB`);
+/**
+ * Main function to run the daily aggregation.
+ * @param forceDate Optional date to aggregate (defaults to yesterday)
+ */
+export async function runDailyAggregation(forceDate?: Date) {
+  const isStandAlone = mongoose.connection.readyState === 0;
+  
+  if (isStandAlone) {
+    await mongoose.connect(MONGO_URI);
+    console.log(`✅ Connected to MongoDB`);
+  }
 
-  // Target "Yesterday"
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
+  // Target "Yesterday" or the forced date
+  const targetDate = forceDate || new Date();
+  if (!forceDate) {
+    targetDate.setDate(targetDate.getDate() - 1);
+  }
 
   const bots = await Bot.find({}).lean();
   console.log(`🚀 Starting Daily Aggregation for ${bots.length} bots...`);
 
   for (const bot of bots) {
     console.log(`\n📦 Bot: ${bot.name} (${bot.botId})`);
-    await aggregateForBot(bot.botId, yesterday);
+    try {
+      await aggregateForBot(bot.botId, targetDate);
+    } catch (err) {
+      console.error(`❌ Failed to aggregate for bot ${bot.botId}:`, err);
+    }
   }
 
   // 🗑️ CLEANUP: Remove old raw data
@@ -106,20 +122,30 @@ async function main() {
   cutoff.setHours(cutoff.getHours() - SAFETY_WINDOW_HOURS);
 
   console.log(`\n🗑️ Cleaning up raw telemetry older than ${SAFETY_WINDOW_HOURS}h...`);
-  const delRes = await Promise.all([
-    CommandEvent.deleteMany({ timestamp: { $lt: cutoff } }),
-    Heartbeat.deleteMany({ timestamp: { $lt: cutoff } }),
-    GuildCount.deleteMany({ timestamp: { $lt: cutoff } })
-  ]);
-  
-  console.log(`   ✅ Deleted ${delRes[0].deletedCount} commands, ${delRes[1].deletedCount} heartbeats.`);
+  try {
+    const delRes = await Promise.all([
+      CommandEvent.deleteMany({ timestamp: { $lt: cutoff } }),
+      Heartbeat.deleteMany({ timestamp: { $lt: cutoff } }),
+      GuildCount.deleteMany({ timestamp: { $lt: cutoff } })
+    ]);
+    
+    console.log(`   ✅ Deleted ${delRes[0].deletedCount} commands, ${delRes[1].deletedCount} heartbeats.`);
+  } catch (err) {
+    console.error('❌ Cleanup failed:', err);
+  }
 
   console.log('\n✨ Nightly Aggregation Finished.');
-  await mongoose.disconnect();
+
+  if (isStandAlone) {
+    await mongoose.disconnect();
+  }
 }
 
-main().catch(async (err) => {
-  console.error('❌ Aggregation failed:', err);
-  try { await mongoose.disconnect(); } catch {}
-  process.exit(1);
-});
+// Support running directly via ts-node
+if (require.main === module) {
+  runDailyAggregation().catch(async (err) => {
+    console.error('❌ Aggregation failed:', err);
+    process.exit(1);
+  });
+}
+

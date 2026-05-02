@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import crypto from 'crypto';
 import { redis, isRedisReady } from '../lib/redis';
 import { Bot, AuditLog, News, SystemConfig, CommandEvent } from '../models';
+import { runDailyAggregation } from '../scripts/aggregateDaily';
 
 /**
  * Publishes a new announcement/news item.
@@ -99,31 +100,32 @@ export const impersonateBot = async (req: Request, res: Response): Promise<void>
  */
 export const getGlobalInsights = async (req: Request, res: Response): Promise<void> => {
   try {
-    const now = new Date();
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    const today = new Date().toISOString().split('T')[0];
+    
+    let topCommandsRaw: string[] = [];
+    let anomalyBotsRaw: string[] = [];
 
-    const [topCommands, anomalyBots] = await Promise.all([
-      CommandEvent.aggregate([
-        { $match: { timestamp: { $gte: oneDayAgo } } },
-        { $group: { _id: '$command', count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 10 }
-      ]),
-      CommandEvent.aggregate([
-        { $match: { timestamp: { $gte: oneHourAgo } } },
-        { $group: { _id: '$botId', count: { $sum: 1 } } },
-        { $match: { count: { $gt: 5000 } } },
-        { $sort: { count: -1 } }
-      ])
-    ]);
+    if (isRedisReady()) {
+      topCommandsRaw = await redis!.zrevrange(`trends:commands:${today}`, 0, 9, 'WITHSCORES');
+      anomalyBotsRaw = await redis!.zrevrangebyscore(`trends:bots:${today}`, '+inf', 5000, 'WITHSCORES', 'LIMIT', 0, 10);
+    }
+
+    const topCommands = [];
+    for (let i = 0; i < topCommandsRaw.length; i += 2) {
+      topCommands.push({ command: topCommandsRaw[i], count: parseInt(topCommandsRaw[i + 1], 10) });
+    }
+
+    const anomalies = [];
+    for (let i = 0; i < anomalyBotsRaw.length; i += 2) {
+      anomalies.push({ botId: anomalyBotsRaw[i], count: parseInt(anomalyBotsRaw[i + 1], 10), type: 'high_volume' });
+    }
 
     res.status(200).json({
       success: true,
       data: {
-        topCommands: topCommands.map(c => ({ command: c._id, count: c.count })),
-        anomalies: anomalyBots.map(b => ({ botId: b._id, count: b.count, type: 'high_volume' })),
-        timestamp: now.toISOString()
+        topCommands,
+        anomalies,
+        timestamp: new Date().toISOString()
       }
     });
   } catch (error) {
@@ -158,13 +160,11 @@ export const getPulse = async (req: Request, res: Response): Promise<void> => {
 
     let rateLimitHeatmap: Record<string, number> = {};
     if (isRedisReady()) {
-      const heatmapKeys = await redis!.keys('ratelimit:429:*');
-      if (heatmapKeys.length > 0) {
-        const heatmapValues = await redis!.mget(...heatmapKeys);
-        heatmapKeys.forEach((key, i) => {
-          const apiKey = key.replace('ratelimit:429:', '');
-          rateLimitHeatmap[apiKey] = parseInt(heatmapValues[i] || '0', 10);
-        });
+      const today = new Date().toISOString().split('T')[0];
+      const heatmapKey = `ratelimit:heatmap:${today}`;
+      const heatmapValues = await redis!.zrevrange(heatmapKey, 0, 19, 'WITHSCORES');
+      for (let i = 0; i < heatmapValues.length; i += 2) {
+        rateLimitHeatmap[heatmapValues[i]] = parseInt(heatmapValues[i + 1], 10);
       }
     }
 
@@ -191,3 +191,25 @@ export const getPulse = async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 };
+
+/**
+ * Manually triggers the daily aggregation and cleanup script.
+ */
+export const triggerManualAggregation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { date } = req.body;
+    const targetDate = date ? new Date(date) : undefined;
+
+    // Run in background so we don't timeout the request
+    runDailyAggregation(targetDate).catch(err => console.error('[Manual Aggregation] Failed:', err));
+
+    res.status(202).json({ 
+      success: true, 
+      message: 'Manual aggregation triggered in background.' 
+    });
+  } catch (error) {
+    console.error('Error triggering manual aggregation:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+

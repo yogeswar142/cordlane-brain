@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { Bot, CommandEvent, GuildCount, Heartbeat, Revenue, DailySummary, LegacyStats } from '../models';
 import type { TrackCommandInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
-import { redis, incrementEps } from '../lib/redis';
+import { redis, incrementEps, trackAdminTrends } from '../lib/redis';
 import { getRetentionData } from '../services/retentionStats';
 import { resolveCountryCode } from '../utils/locale';
 
@@ -158,6 +158,7 @@ export const trackCommand = async (req: Request, res: Response): Promise<void> =
 
     await incrementEps(1);
     await incrementApiCallsAndVerify(botId);
+    await trackAdminTrends(botId, command, 1);
 
     res.status(200).json({ success: true, message: 'Command event tracked' });
   } catch (error) {
@@ -316,6 +317,18 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
     if (failures.length > 0) {
       console.warn(`[Batch] ${failures.length}/${results.length} insert groups had partial failures`);
     }
+    
+    // Tally commands for admin trends
+    const commandCounts: Record<string, number> = {};
+    for (const cmd of commands) {
+      if (cmd.command) {
+        commandCounts[cmd.command] = (commandCounts[cmd.command] || 0) + 1;
+      }
+    }
+    for (const [cmdName, count] of Object.entries(commandCounts)) {
+      trackAdminTrends(botId, cmdName, count).catch(() => {});
+    }
+
     await incrementEps(events.length);
     await incrementApiCallsAndVerify(botId, events.length);
 

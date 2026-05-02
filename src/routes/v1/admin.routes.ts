@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAdminAuth } from '../../middleware/auth';
-import { getPulse, impersonateBot, getGlobalInsights, postNews } from '../../controllers/admin.controller';
+import { getPulse, impersonateBot, getGlobalInsights, postNews, triggerManualAggregation } from '../../controllers/admin.controller';
 
 const router = Router();
 
@@ -15,5 +15,6 @@ router.get('/pulse', getPulse);
 router.post('/impersonate', impersonateBot);
 router.get('/insights', getGlobalInsights);
 router.post('/news', postNews);
+router.post('/maintenance/aggregate', triggerManualAggregation);
 
 export default router;

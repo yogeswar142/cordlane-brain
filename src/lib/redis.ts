@@ -55,3 +55,26 @@ export const incrementEps = async (amount: number = 1): Promise<void> => {
     // Silent fail for telemetry stats to avoid blocking the main request
   }
 };
+
+/**
+ * Tracks command and bot trends for the admin dashboard using ZSETs.
+ * Expire after 7 days to conserve memory.
+ */
+export const trackAdminTrends = async (botId: string, commandName: string, amount: number = 1): Promise<void> => {
+  if (!isRedisReady()) return;
+  const today = new Date().toISOString().split('T')[0];
+  const commandKey = `trends:commands:${today}`;
+  const botKey = `trends:bots:${today}`;
+
+  try {
+    const multi = redis!.multi();
+    multi.zincrby(commandKey, amount, commandName);
+    multi.zincrby(botKey, amount, botId);
+    multi.expire(commandKey, 7 * 86400); // 7 days
+    multi.expire(botKey, 7 * 86400); // 7 days
+    await multi.exec();
+  } catch (err) {
+    // Silent fail
+  }
+};
+
