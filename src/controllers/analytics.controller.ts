@@ -317,7 +317,7 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
     // Process non-bulk updates (Bucketed heartbeats)
     const heartbeatPromises = heartbeats.map(hb => {
       const hour = new Date(hb.timestamp);
-      hour.setMinutes(0, 0, 0, 0);
+      hour.setMinutes(0, 0, 0);
       return Heartbeat.findOneAndUpdate(
         { botId: hb.botId, shardId: hb.shardId, hour },
         { 
@@ -428,7 +428,7 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
         ])
       ]);
 
-      const lastHeartbeat = latestHeartbeat?.timestamp;
+      const lastHeartbeat = latestHeartbeat?.lastTimestamp;
       const latencyMs = lastHeartbeat ? Math.max(0, Date.now() - new Date(lastHeartbeat).getTime()) : undefined;
       const status: 'online' | 'lagging' | 'offline' = !latencyMs
         ? 'offline'
@@ -480,7 +480,6 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
     const [
-      legacy,
       historicalSummaries,
       liveCommandsToday,
       liveDauToday,
@@ -493,7 +492,6 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
       totalRevenueCurrentAgg,
       totalRevenuePrevAgg,
     ] = await Promise.all([
-      LegacyStats.findOne({ botId: requestedBotId }).lean() as Promise<any>,
       DailySummary.find({ botId: requestedBotId, date: { $gte: rangeStart.toISOString().split('T')[0] } }).sort({ date: 1 }).lean() as Promise<any[]>,
       CommandEvent.countDocuments({ botId: requestedBotId, timestamp: { $gte: startOfToday } }),
       CommandEvent.distinct('userId', { botId: requestedBotId, timestamp: { $gte: startOfToday } }),
