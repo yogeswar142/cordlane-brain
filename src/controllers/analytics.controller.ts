@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Bot, CommandEvent, GuildCount, Heartbeat, Revenue, DailySummary, LegacyStats } from '../models';
+import { Bot, CommandEvent, GuildCount, Heartbeat, Revenue, DailySummary } from '../models';
 import type { TrackCommandInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
 import { redis, incrementEps, trackAdminTrends } from '../lib/redis';
 import { getRetentionData } from '../services/retentionStats';
@@ -218,13 +218,22 @@ export const heartbeat = async (req: Request, res: Response): Promise<void> => {
     const latencyMs = Math.max(0, Date.now() - ts.getTime());
     const status = latencyMs > 120000 ? 'offline' : latencyMs > 30000 ? 'lagging' : 'online';
 
-    await Heartbeat.create({
-      botId,
-      shardId: normalizedShard.shardId,
-      totalShards: normalizedShard.totalShards,
-      uptime,
-      timestamp: ts
-    });
+    // Start of the hour for bucketing
+    const hour = new Date(ts);
+    hour.setMinutes(0, 0, 0);
+
+    await Heartbeat.findOneAndUpdate(
+      { botId, shardId: normalizedShard.shardId, hour },
+      { 
+        $inc: { count: 1 },
+        $set: { 
+          lastUptime: uptime, 
+          lastTimestamp: ts,
+          totalShards: normalizedShard.totalShards 
+        }
+      },
+      { upsert: true }
+    );
     await upsertBotShardSnapshot(botId, normalizedShard.shardId, normalizedShard.totalShards, {
       lastHeartbeat: ts,
       latencyMs,
@@ -305,14 +314,31 @@ export const trackBatch = async (req: Request, res: Response): Promise<void> => 
       }
     }
 
+    // Process non-bulk updates (Bucketed heartbeats)
+    const heartbeatPromises = heartbeats.map(hb => {
+      const hour = new Date(hb.timestamp);
+      hour.setMinutes(0, 0, 0, 0);
+      return Heartbeat.findOneAndUpdate(
+        { botId: hb.botId, shardId: hb.shardId, hour },
+        { 
+          $inc: { count: 1 },
+          $set: { 
+            lastUptime: hb.uptime, 
+            lastTimestamp: hb.timestamp,
+            totalShards: hb.totalShards 
+          }
+        },
+        { upsert: true }
+      );
+    });
+
     const promises = [];
     // ordered: false — continue inserting remaining docs if one fails (fault-tolerant batch processing)
     if (commands.length > 0) promises.push(CommandEvent.insertMany(commands, { ordered: false }));
     if (guildCounts.length > 0) promises.push(GuildCount.insertMany(guildCounts, { ordered: false }));
-    if (heartbeats.length > 0) promises.push(Heartbeat.insertMany(heartbeats, { ordered: false }));
 
     // Use allSettled to handle partial batch failures gracefully
-    const results = await Promise.allSettled(promises);
+    const results = await Promise.allSettled([...promises, ...heartbeatPromises]);
     const failures = results.filter(r => r.status === 'rejected');
     if (failures.length > 0) {
       console.warn(`[Batch] ${failures.length}/${results.length} insert groups had partial failures`);
@@ -394,7 +420,7 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
     // Legacy fallback for bots that never wrote shard snapshots.
     if (shards.length === 0) {
       const [latestHeartbeat, shardGuildCounts] = await Promise.all([
-        Heartbeat.findOne({ botId: requestedBotId }).sort({ timestamp: -1 }).lean() as Promise<{ timestamp: Date } | null>,
+        Heartbeat.findOne({ botId: requestedBotId }).sort({ hour: -1, lastTimestamp: -1 }).lean() as Promise<{ lastTimestamp: Date } | null>,
         GuildCount.aggregate([
           { $match: { botId: requestedBotId } },
           { $sort: { timestamp: -1 } },
@@ -594,7 +620,10 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
           commandsWeekly: historicalTotalCommands + liveCommandsToday,
           dau: liveDauToday.length,
           uptimePercent: historicalSummaries.length > 0 ? historicalSummaries.reduce((acc, s) => acc + s.uptime, 0) / historicalSummaries.length : 100,
-          heartbeatsToday: await Heartbeat.countDocuments({ botId: requestedBotId, timestamp: { $gte: startOfToday } }),
+          heartbeatsToday: (await Heartbeat.aggregate([
+            { $match: { botId: requestedBotId, hour: { $gte: startOfToday } } },
+            { $group: { _id: null, total: { $sum: '$count' } } }
+          ]))[0]?.total || 0,
         },
         commandsByDate,
         advanced: {

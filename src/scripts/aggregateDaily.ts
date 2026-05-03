@@ -52,10 +52,14 @@ async function aggregateForBot(botId: string, date: Date) {
     ])
   ]);
 
-  // 3. Uptime
-  const heartbeats = await Heartbeat.countDocuments({ botId, timestamp: { $gte: startOfDay, $lte: endOfDay } });
+  // 3. Uptime (Summing bucketed counts)
+  const heartbeatAgg = await Heartbeat.aggregate([
+    { $match: { botId, hour: { $gte: startOfDay, $lte: endOfDay } } },
+    { $group: { _id: null, total: { $sum: '$count' } } }
+  ]);
+  const heartbeatCount = heartbeatAgg[0]?.total || 0;
   // Expected heartbeats in 24h (1 every 30s) = 2880
-  const uptime = Math.min(100, (heartbeats / 2880) * 100);
+  const uptime = Math.min(100, (heartbeatCount / 2880) * 100);
 
   // 4. Locales & Countries Record
   const localeMap: Record<string, number> = {};
@@ -125,11 +129,11 @@ export async function runDailyAggregation(forceDate?: Date) {
   try {
     const delRes = await Promise.all([
       CommandEvent.deleteMany({ timestamp: { $lt: cutoff } }),
-      Heartbeat.deleteMany({ timestamp: { $lt: cutoff } }),
+      Heartbeat.deleteMany({ hour: { $lt: cutoff } }),
       GuildCount.deleteMany({ timestamp: { $lt: cutoff } })
     ]);
     
-    console.log(`   ✅ Deleted ${delRes[0].deletedCount} commands, ${delRes[1].deletedCount} heartbeats.`);
+    console.log(`   ✅ Deleted ${delRes[0].deletedCount} commands, ${delRes[1].deletedCount} heartbeat buckets.`);
   } catch (err) {
     console.error('❌ Cleanup failed:', err);
   }

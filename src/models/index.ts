@@ -17,9 +17,6 @@ export type { IHeartbeat } from './Heartbeat';
 export { DailySummary } from './DailySummary';
 export type { IDailySummary } from './DailySummary';
 
-export { LegacyStats } from './LegacyStats';
-export type { ILegacyStats } from './LegacyStats';
-
 export { Post } from './Post';
 export type { IPost } from './Post';
 
