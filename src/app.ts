@@ -14,8 +14,13 @@ const app = express();
 app.use(helmet()); // Security headers
 app.use(cors()); // Allow cross-origin requests
 app.use(express.json({ limit: '10mb' })); // Parse JSON bodies with increased limit
-app.use(morgan('dev')); // Logging
+// Define a custom token for the Bot Name
+morgan.token('bot-name', (req: any) => {
+  return req.bot ? req.bot.name : 'Unknown/NoBot';
+});
 
+// Use custom logging format that includes the bot name
+app.use(morgan(':method :url :status :response-time ms - :res[content-length] [:bot-name]'));
 // Rate limiter: 120 requests/minute per API key
 app.use('/api/v1', rateLimiter(120, 60_000));
 
