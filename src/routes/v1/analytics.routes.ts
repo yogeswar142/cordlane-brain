@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { requireApiKey } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
-import { trackCommandSchema, guildCountSchema, heartbeatSchema, trackBatchSchema } from '../../validators/schemas';
-import { trackCommand, legacyTrackUser, postGuildCount, heartbeat, trackBatch, getBotSummary, searchBots } from '../../controllers/analytics.controller';
+import { trackCommandSchema, guildCountSchema, heartbeatSchema, trackBatchSchema, checkFollowSchema } from '../../validators/schemas';
+import { trackCommand, legacyTrackUser, postGuildCount, heartbeat, trackBatch, getBotSummary, searchBots, checkFollow } from '../../controllers/analytics.controller';
 
 const router = Router();
 
@@ -19,5 +19,6 @@ router.post('/track-user', legacyTrackUser); // Legacy Support — returns 200 O
 router.post('/guild-count', validate(guildCountSchema), postGuildCount);
 router.post('/heartbeat', validate(heartbeatSchema), heartbeat);
 router.post('/track-batch', validate(trackBatchSchema), trackBatch);
+router.post('/check-follow', validate(checkFollowSchema), checkFollow);
 
 export default router;

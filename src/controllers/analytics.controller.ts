@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Bot, CommandEvent, GuildCount, Heartbeat, Revenue, DailySummary } from '../models';
-import type { TrackCommandInput, GuildCountInput, HeartbeatInput, TrackBatchInput } from '../validators/schemas';
+import type { TrackCommandInput, GuildCountInput, HeartbeatInput, TrackBatchInput, CheckFollowInput } from '../validators/schemas';
 import { redis, incrementEps, trackAdminTrends } from '../lib/redis';
 import { getRetentionData } from '../services/retentionStats';
 import { resolveCountryCode } from '../utils/locale';
@@ -409,13 +409,14 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    const bot = await Bot.findOne({ botId: requestedBotId }).lean() as { botId: string; shards?: ShardSnapshot[] } | null;
+    const bot = await Bot.findOne({ botId: requestedBotId }).lean() as { botId: string; shards?: ShardSnapshot[]; followers?: string[] } | null;
     if (!bot) {
       res.status(404).json({ success: false, error: 'bot not found' });
       return;
     }
 
     let shards = Array.isArray(bot.shards) ? bot.shards : [];
+    const followerCount = Array.isArray(bot.followers) ? bot.followers.length : 0;
 
     // Legacy fallback for bots that never wrote shard snapshots.
     if (shards.length === 0) {
@@ -616,6 +617,7 @@ export const getBotSummary = async (req: Request, res: Response): Promise<void> 
         quickStats: {
           commandsWeekly: historicalTotalCommands + liveCommandsToday,
           dau: liveDauToday.length,
+          followerCount,
           uptimePercent: historicalSummaries.length > 0 ? historicalSummaries.reduce((acc, s) => acc + s.uptime, 0) / historicalSummaries.length : 100,
           heartbeatsToday: (await Heartbeat.aggregate([
             { $match: { botId: requestedBotId, hour: { $gte: startOfToday } } },
@@ -681,6 +683,34 @@ export const searchBots = async (req: Request, res: Response): Promise<void> => 
     });
   } catch (error) {
     console.error('Error searching bots:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+};
+
+export const checkFollow = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userId } = req.body as CheckFollowInput;
+    const authBot = (req as any).bot;
+
+    if (!authBot) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    // Check if the user is in the followers array of this specific bot
+    const isFollowing = await Bot.exists({ 
+      botId: authBot.botId, 
+      followers: userId 
+    });
+
+    res.status(200).json({
+      success: true,
+      isFollowing: !!isFollowing,
+      botId: authBot.botId,
+      userId
+    });
+  } catch (error) {
+    console.error('Error checking follow status:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 };

@@ -104,3 +104,12 @@ export const trackBatchSchema = z.object({
 
 export type TrackBatchInput = z.infer<typeof trackBatchSchema>;
 
+// ─────────────────────────────────────────────────────────────
+// Follow System
+// ─────────────────────────────────────────────────────────────
+export const checkFollowSchema = z.object({
+  userId: z.string().min(1, 'userId is required'),
+});
+
+export type CheckFollowInput = z.infer<typeof checkFollowSchema>;
+

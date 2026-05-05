@@ -8,6 +8,8 @@ export interface IUser extends Document {
   clearanceLevel: number; // 0: User, 1: Moderator, 2: Staff, 3: Admin, 4: SuperAdmin
   lastSeenNewsId?: string;
   isStaff: boolean;
+  followers: string[]; // Array of discordIds
+  following: string[]; // Array of discordIds
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,6 +23,8 @@ const userSchema = new Schema(
     clearanceLevel: { type: Number, default: 0 },
     lastSeenNewsId: { type: String },
     isStaff: { type: Boolean, default: false },
+    followers: { type: [String], default: [] },
+    following: { type: [String], default: [] },
   },
   { timestamps: true }
 );

@@ -35,6 +35,7 @@ export interface IBot extends Document {
     alertedOffline?: boolean;
   }[];
   addedByUserId: string;
+  followers: string[]; // Array of discordIds
   createdAt: Date;
   updatedAt: Date;
 }
@@ -99,6 +100,7 @@ const botSchema = new Schema(
       default: []
     },
     addedByUserId: { type: String, required: true },
+    followers: { type: [String], default: [] },
   },
   { timestamps: true }
 );
